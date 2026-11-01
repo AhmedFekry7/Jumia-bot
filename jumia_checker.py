@@ -9,16 +9,14 @@ BOT_TOKEN = os.environ["BOT_TOKEN"]
 CHAT_ID = str(os.environ["CHAT_ID"]).strip()
 STATE_FILE = "state.json"
 
-STARTER_URLS = [
-    
-    "https://www.jumia.com.eg/ar/defacto-regular-fit-hooded-zip-up-ski-jacket-135305752.html?utm_source=social&utm_medium=pdpshare"
-]
+# Empty by default so it never uses a broken link
+STARTER_URLS = []
 
 
 def send_telegram(message: str):
     url = f"https://api.telegram.org/bot{BOT_TOKEN.strip()}/sendMessage"
     try:
-        resp = cffi_requests.post(
+        cffi_requests.post(
             url,
             json={
                 "chat_id": CHAT_ID.strip(),
@@ -27,7 +25,6 @@ def send_telegram(message: str):
             },
             timeout=15,
         )
-        print("Telegram response:", resp.text)
     except Exception as e:
         print(f"Telegram send error: {e}")
 
@@ -49,16 +46,11 @@ def fetch_new_telegram_messages(last_update_id: int) -> list:
 
 def scrape_jumia_product(url: str) -> dict:
     clean_url = url.split("?")[0].strip()
-    
-    # Use curl_cffi with Chrome impersonation to bypass Cloudflare 403s
     response = cffi_requests.get(
         clean_url,
         impersonate="chrome120",
-        headers={
-            "Accept-Language": "en-US,en;q=0.9,ar;q=0.8",
-            "Cache-Control": "no-cache",
-        },
-        timeout=30,
+        headers={"Accept-Language": "en-US,en;q=0.9"},
+        timeout=25,
     )
     response.raise_for_status()
     soup = BeautifulSoup(response.text, "html.parser")
@@ -90,7 +82,7 @@ def scrape_jumia_product(url: str) -> dict:
 
     if not title:
         h1 = soup.select_one("h1.-fs20") or soup.find("h1")
-        title = h1.get_text(strip=True) if h1 else "DeFacto Ski Jacket"
+        title = h1.get_text(strip=True) if h1 else "Jumia Product"
 
     if price is None:
         price_el = (
@@ -105,7 +97,7 @@ def scrape_jumia_product(url: str) -> dict:
                 price = float(match.group(0))
 
     if price is None:
-        raise ValueError(f"Could not parse price from Jumia page.")
+        raise ValueError(f"Could not find price on {clean_url}")
 
     return {"title": title, "price": price, "in_stock": in_stock}
 
@@ -118,7 +110,7 @@ def send_product_list(products: dict):
     lines = ["📋 *Currently Tracked Jumia Products:*\n"]
     for idx, (url, info) in enumerate(products.items(), start=1):
         if info.get("price") is None:
-            lines.append(f"*{idx}.* Pending initial check...\n   [View on Jumia]({url})")
+            lines.append(f"*{idx}.* Pending check...\n   [View on Jumia]({url})")
         else:
             stock_icon = "✅" if info.get("in_stock", True) else "❌"
             lines.append(
@@ -166,16 +158,13 @@ def process_chat_commands(state: dict) -> bool:
                     removed_title = products[target_url].get("title") or target_url
                     del products[target_url]
                     send_telegram(f"🗑️ Removed from tracker:\n*{removed_title}*")
-                else:
-                    send_telegram(f"❌ Invalid number. Send `/list` to see item numbers.")
-            else:
-                send_telegram("Usage: `/remove 1` (send `/list` to check numbers).")
 
         found_urls = re.findall(r"https?://(?:www\.)?jumia\.com\.eg/[^\s]+", text)
         for raw_url in found_urls:
             clean_url = raw_url.split("?")[0].strip()
             if clean_url not in products:
                 products[clean_url] = {"title": None, "price": None, "in_stock": True}
+                send_telegram(f"➕ *Added to tracker!*\n{clean_url}")
 
     if status_requested:
         send_product_list(products)
@@ -190,12 +179,7 @@ def load_state() -> dict:
             if "products" not in raw:
                 return {"last_update_id": 0, "products": raw}
             return raw
-
-    initial_products = {
-        u.split("?")[0]: {"title": None, "price": None, "in_stock": True}
-        for u in STARTER_URLS
-    }
-    return {"last_update_id": 0, "products": initial_products}
+    return {"last_update_id": 0, "products": {}}
 
 
 def main():
@@ -217,11 +201,11 @@ def main():
                 changed = True
                 stock_badge = "✅ In Stock" if now_in_stock else "❌ Out of Stock"
                 send_telegram(
-                    f"✅ *Now Tracking New Jumia Item!*\n"
+                    f"✅ *Now Tracking Item!*\n"
                     f"*{current['title']}*\n"
                     f"💰 Initial Price: *EGP {new_price:,.2f}*\n"
                     f"📦 Status: {stock_badge}\n"
-                    f"[View on Jumia Egypt]({url})"
+                    f"[View on Jumia]({url})"
                 )
                 continue
 
@@ -232,29 +216,19 @@ def main():
             if new_price < old_price:
                 diff = old_price - new_price
                 pct = (diff / old_price) * 100
-                alerts.append(
-                    f"📉 *PRICE DROPPED by EGP {diff:,.2f} (-{pct:.1f}%)*\n"
-                    f"Old: EGP {old_price:,.2f} -> *New: EGP {new_price:,.2f}*"
-                )
+                alerts.append(f"📉 *Price Dropped by EGP {diff:,.2f} (-{pct:.1f}%)*\nOld: EGP {old_price:,.2f} -> *New: EGP {new_price:,.2f}*")
             elif new_price > old_price:
                 diff = new_price - old_price
                 pct = (diff / old_price) * 100
-                alerts.append(
-                    f"📈 *PRICE INCREASED by EGP {diff:,.2f} (+{pct:.1f}%)*\n"
-                    f"Old: EGP {old_price:,.2f} -> *New: EGP {new_price:,.2f}*"
-                )
+                alerts.append(f"📈 *Price Increased by EGP {diff:,.2f} (+{pct:.1f}%)*\nOld: EGP {old_price:,.2f} -> *New: EGP {new_price:,.2f}*")
 
             if not was_in_stock and now_in_stock:
-                alerts.append(f"✅ *BACK IN STOCK!* (EGP {new_price:,.2f})")
+                alerts.append(f"✅ *Back in stock!* (EGP {new_price:,.2f})")
             elif was_in_stock and not now_in_stock:
-                alerts.append("⚠️ *Item just went OUT OF STOCK.*")
+                alerts.append("⚠️ *Item went out of stock.*")
 
             if alerts:
-                send_telegram(
-                    f"🔔 *Jumia Alert: {current['title']}*\n\n"
-                    + "\n\n".join(alerts)
-                    + f"\n\n[Open on Jumia Egypt]({url})"
-                )
+                send_telegram(f"🔔 *Jumia Alert: {current['title']}*\n\n" + "\n\n".join(alerts))
                 products[url] = current
                 changed = True
 
