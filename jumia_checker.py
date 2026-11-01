@@ -1,10 +1,8 @@
 import json
 import os
-import random
 import re
 import time
-from bs4 import BeautifulSoup
-from curl_cffi import requests as cffi_requests
+import requests
 
 BOT_TOKEN = os.environ["BOT_TOKEN"]
 CHAT_ID = str(os.environ["CHAT_ID"]).strip()
@@ -16,29 +14,29 @@ STARTER_URLS = [
 
 
 def send_telegram(message: str):
-    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+    url = f"https://api.telegram.org/bot{BOT_TOKEN.strip()}/sendMessage"
     try:
-        cffi_requests.post(
+        resp = requests.post(
             url,
             json={
-                "chat_id": CHAT_ID,
+                "chat_id": CHAT_ID.strip(),
                 "text": message,
-                "parse_mode": "Markdown",
                 "disable_web_page_preview": True,
             },
             timeout=15,
         )
+        print("Telegram response:", resp.text)
     except Exception as e:
         print(f"Telegram send error: {e}")
 
 
 def fetch_new_telegram_messages(last_update_id: int) -> list:
-    url = f"https://api.telegram.org/bot{BOT_TOKEN}/getUpdates"
+    url = f"https://api.telegram.org/bot{BOT_TOKEN.strip()}/getUpdates"
     params = {"timeout": 5}
     if last_update_id:
         params["offset"] = last_update_id + 1
     try:
-        resp = cffi_requests.get(url, params=params, timeout=15)
+        resp = requests.get(url, params=params, timeout=15)
         data = resp.json()
         if data.get("ok"):
             return data.get("result", [])
@@ -50,79 +48,49 @@ def fetch_new_telegram_messages(last_update_id: int) -> list:
 def scrape_jumia_product(url: str) -> dict:
     clean_url = url.split("?")[0].strip()
     
-    # Create a session to mimic a real persistent browser connection
-    session = cffi_requests.Session()
+    # Use Jina reader proxy to bypass Cloudflare 403 blocks on GitHub servers
+    proxy_url = f"https://r.jina.ai/{clean_url}"
+    headers = {"Accept": "text/plain"}
     
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
-        "Accept-Language": "en-US,en;q=0.9,ar;q=0.8",
-        "Accept-Encoding": "gzip, deflate, br",
-        "Connection": "keep-alive",
-        "Upgrade-Insecure-Requests": "1",
-        "Sec-Fetch-Dest": "document",
-        "Sec-Fetch-Mode": "navigate",
-        "Sec-Fetch-Site": "none",
-        "Sec-Fetch-User": "?1",
-    }
-    
-    response = session.get(
-        clean_url,
-        impersonate="chrome120",
-        headers=headers,
-        timeout=30,
-    )
+    response = requests.get(proxy_url, headers=headers, timeout=30)
     response.raise_for_status()
-    soup = BeautifulSoup(response.text, "html.parser")
+    text = response.text
 
-    title = None
+    # Extract Title (usually first markdown heading or line)
+    title_match = re.search(r"Title:\s*(.+)", text)
+    title = title_match.group(1).strip() if title_match else "Jumia Product"
+
+    # Extract Price (look for EGP or numbers following currency)
     price = None
+    # Search for patterns like EGP 1,234.00 or similar in text
+    price_matches = re.findall(r"(?:EGP|LE)\s*([\d,]+\.?\d*)", text, re.IGNORECASE)
+    if price_matches:
+        # Clean and pick the first valid price found
+        for p_str in price_matches:
+            cleaned = p_str.replace(",", "").strip()
+            try:
+                val = float(cleaned)
+                if val > 1.0:
+                    price = val
+                    break
+            except ValueError:
+                continue
+
+    if price is None:
+        # Fallback search for any large number that looks like a price
+        num_matches = re.findall(r"\b\d{2,5}(?:\.\d{2})?\b", text)
+        if num_matches:
+            try:
+                price = float(num_matches[0])
+            except ValueError:
+                pass
+
+    if price is None:
+        raise ValueError(f"Could not parse price from Jumia page text.")
+
     in_stock = True
-
-    for script in soup.find_all("script", type="application/ld+json"):
-        try:
-            data = json.loads(script.string or "")
-            items = data if isinstance(data, list) else [data]
-            for item in items:
-                if item.get("@type") == "Product":
-                    title = item.get("name")
-                    offers = item.get("offers", {})
-                    if isinstance(offers, list):
-                        offers = offers[0]
-                    raw_price = offers.get("price") or offers.get("lowPrice")
-                    if raw_price is not None:
-                        price = float(str(raw_price).replace(",", ""))
-                    availability = str(offers.get("availability", ""))
-                    if "OutOfStock" in availability:
-                        in_stock = False
-                    elif "InStock" in availability:
-                        in_stock = True
-        except Exception:
-            continue
-
-    if not title:
-        h1 = soup.select_one("h1.-fs20") or soup.find("h1")
-        title = h1.get_text(strip=True) if h1 else "Jumia Product"
-
-    if price is None:
-        price_el = (
-            soup.select_one("span.-b.-ubpt.-tal.-fs24.-prxs")
-            or soup.select_one("span.-b.-fs24")
-            or soup.select_one("div.prc")
-        )
-        if price_el:
-            raw_text = price_el.get_text(strip=True).replace(",", "")
-            match = re.search(r"\d+(\.\d+)?", raw_text)
-            if match:
-                price = float(match.group(0))
-
-    page_text_lower = soup.get_text(" ", strip=True).lower()
-    if "out of stock" in page_text_lower or "غير متوفر" in page_text_lower:
-        if not soup.select_one("button.add"):
-            in_stock = False
-
-    if price is None:
-        raise ValueError(f"Could not find price on {clean_url}")
+    if "out of stock" in text.lower() or "غير متوفر" in text.lower():
+        in_stock = False
 
     return {"title": title, "price": price, "in_stock": in_stock}
 
@@ -143,7 +111,6 @@ def send_product_list(products: dict):
                 f"   💰 EGP {info['price']:,.2f} | {stock_icon}\n"
                 f"   [View on Jumia]({url})"
             )
-    lines.append("\n💡 _Reply `/remove 1` to delete item #1, or paste a new Jumia link to add it._")
     send_telegram("\n".join(lines))
 
 
@@ -194,8 +161,6 @@ def process_chat_commands(state: dict) -> bool:
             clean_url = raw_url.split("?")[0].strip()
             if clean_url not in products:
                 products[clean_url] = {"title": None, "price": None, "in_stock": True}
-            else:
-                send_telegram(f"ℹ️ Already tracking:\n{clean_url}")
 
     if status_requested:
         send_product_list(products)
@@ -225,7 +190,7 @@ def main():
 
     for idx, (url, saved) in enumerate(list(products.items())):
         if idx > 0:
-            time.sleep(random.uniform(2.0, 4.5))
+            time.sleep(2.0)
 
         try:
             current = scrape_jumia_product(url)
