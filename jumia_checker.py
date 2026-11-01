@@ -224,7 +224,6 @@ def main():
             was_in_stock = saved.get("in_stock", True)
             alerts = []
 
-In_price_drop = new_price < old_price
             if new_price < old_price:
                 diff = old_price - new_price
                 pct = (diff / old_price) * 100
@@ -234,4 +233,33 @@ In_price_drop = new_price < old_price
                 )
             elif new_price > old_price:
                 diff = new_price - old_price
-                pct = (diff /
+                pct = (diff / old_price) * 100
+                alerts.append(
+                    f"📈 *PRICE INCREASED by EGP {diff:,.2f} (+{pct:.1f}%)*\n"
+                    f"Old: EGP {old_price:,.2f} -> *New: EGP {new_price:,.2f}*"
+                )
+
+            if not was_in_stock and now_in_stock:
+                alerts.append(f"✅ *BACK IN STOCK!* (EGP {new_price:,.2f})")
+            elif was_in_stock and not now_in_stock:
+                alerts.append("⚠️ *Item just went OUT OF STOCK.*")
+
+            if alerts:
+                send_telegram(
+                    f"🔔 *Jumia Alert: {current['title']}*\n\n"
+                    + "\n\n".join(alerts)
+                    + f"\n\n[Open on Jumia Egypt]({url})"
+                )
+                products[url] = current
+                changed = True
+
+        except Exception as e:
+            print(f"Error checking {url}: {e}")
+
+    if changed:
+        with open(STATE_FILE, "w", encoding="utf-8") as f:
+            json.dump(state, f, indent=2, ensure_ascii=False)
+
+
+if __name__ == "__main__":
+    main()
