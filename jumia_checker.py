@@ -59,6 +59,7 @@ def scrape_jumia_product(url: str) -> dict:
     price = None
     in_stock = True
 
+    # 1. Try JSON-LD
     for script in soup.find_all("script", type="application/ld+json"):
         try:
             data = json.loads(script.string or "")
@@ -80,15 +81,18 @@ def scrape_jumia_product(url: str) -> dict:
         except Exception:
             continue
 
+    # 2. Fallback Title
     if not title:
         h1 = soup.select_one("h1.-fs20") or soup.find("h1")
         title = h1.get_text(strip=True) if h1 else "Jumia Product"
 
+    # 3. Fallback Price Selectors for Jumia
     if price is None:
         price_el = (
             soup.select_one("span.-b.-ubpt.-tal.-fs24.-prxs")
             or soup.select_one("span.-b.-fs24")
             or soup.select_one("div.prc")
+            or soup.select_one("span.price")
         )
         if price_el:
             raw_text = price_el.get_text(strip=True).replace(",", "")
@@ -96,11 +100,24 @@ def scrape_jumia_product(url: str) -> dict:
             if match:
                 price = float(match.group(0))
 
+    # 4. Ultimate Regex Fallback on page text if still None
+    if price is None:
+        page_text = soup.get_text(" ", strip=True)
+        # Look for numbers near EGP or general price-like values
+        matches = re.findall(r"(?:EGP|LE)?\s*(\d{3,6}(?:\.\d{2})?)", page_text)
+        for m in matches:
+            try:
+                val = float(m.replace(",", ""))
+                if 50 <= val <= 200000:
+                    price = val
+                    break
+            except ValueError:
+                continue
+
     if price is None:
         raise ValueError(f"Could not find price on {clean_url}")
 
     return {"title": title, "price": price, "in_stock": in_stock}
-
 
 def send_product_list(products: dict):
     if not products:
