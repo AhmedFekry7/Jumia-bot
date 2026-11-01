@@ -47,15 +47,27 @@ def fetch_new_telegram_messages(last_update_id: int) -> list:
 
 def scrape_jumia_product(url: str) -> dict:
     clean_url = url.split("?")[0].strip()
-    proxy_url = f"https://api.allorigins.win/raw?url={clean_url}"
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "Accept-Language": "en-US,en;q=0.9"
     }
     
-    response = requests.get(proxy_url, headers=headers, timeout=30)
-    response.raise_for_status()
-    html_content = response.text
-    
+    html_content = None
+    # Try primary proxy (AllOrigins)
+    try:
+        proxy_url = f"https://api.allorigins.win/raw?url={clean_url}"
+        resp = requests.get(proxy_url, headers=headers, timeout=15)
+        if resp.status_code == 200 and "Just a moment" not in resp.text:
+            html_content = resp.text
+    except Exception:
+        pass
+
+    # Fallback to direct request if proxy fails or times out
+    if not html_content:
+        resp = requests.get(clean_url, headers=headers, timeout=15)
+        resp.raise_for_status()
+        html_content = resp.text
+
     soup = BeautifulSoup(html_content, "html.parser")
     
     title = None
@@ -100,9 +112,10 @@ def scrape_jumia_product(url: str) -> dict:
                 price = float(match.group(0))
 
     if price is None:
-        raise ValueError(f"Could not parse price from proxy HTML response.")
+        raise ValueError(f"Could not parse price from page response.")
 
     return {"title": title, "price": price, "in_stock": in_stock}
+
 
 
 def send_product_list(products: dict):
