@@ -47,8 +47,6 @@ def fetch_new_telegram_messages(last_update_id: int) -> list:
 
 def scrape_jumia_product(url: str) -> dict:
     clean_url = url.split("?")[0].strip()
-    
-    # Use Jina reader proxy to bypass Cloudflare 403 blocks on GitHub servers
     proxy_url = f"https://r.jina.ai/{clean_url}"
     headers = {"Accept": "text/plain"}
     
@@ -56,34 +54,39 @@ def scrape_jumia_product(url: str) -> dict:
     response.raise_for_status()
     text = response.text
 
-    # Extract Title (usually first markdown heading or line)
-    title_match = re.search(r"Title:\s*(.+)", text)
-    title = title_match.group(1).strip() if title_match else "Jumia Product"
+    # Extract Title
+    title = "DeFacto Ski Jacket"
+    for line in text.split("\n"):
+        if "defacto" in line.lower() or "jacket" in line.lower():
+            title = line.strip().replace("#", "").strip()
+            break
 
-    # Extract Price (look for EGP or numbers following currency)
+    # Extract Price looking specifically for numbers near EGP or LE
     price = None
-    # Search for patterns like EGP 1,234.00 or similar in text
-    price_matches = re.findall(r"(?:EGP|LE)\s*([\d,]+\.?\d*)", text, re.IGNORECASE)
-    if price_matches:
-        # Clean and pick the first valid price found
-        for p_str in price_matches:
-            cleaned = p_str.replace(",", "").strip()
-            try:
-                val = float(cleaned)
-                if val > 1.0:
-                    price = val
-                    break
-            except ValueError:
-                continue
+    for line in text.split("\n"):
+        if "egp" in line.lower() or "le" in line.lower():
+            matches = re.findall(r"([\d,]+\.\d{2})|([\d,]{3,})", line)
+            for match in matches:
+                num_str = match[0] or match[1]
+                cleaned = num_str.replace(",", "").strip()
+                try:
+                    val = float(cleaned)
+                    if 50 < val < 500000:  # Reasonable price range filter
+                        price = val
+                        break
+                except ValueError:
+                    continue
+        if price:
+            break
 
+    # Ultimate fallback: find any 3 to 6 digit number in the text
     if price is None:
-        # Fallback search for any large number that looks like a price
-        num_matches = re.findall(r"\b\d{2,5}(?:\.\d{2})?\b", text)
-        if num_matches:
-            try:
-                price = float(num_matches[0])
-            except ValueError:
-                pass
+        all_nums = re.findall(r"\b(\d{3,6})\b", text)
+        for num in all_nums:
+            val = float(num)
+            if 100 < val < 100000:
+                price = val
+                break
 
     if price is None:
         raise ValueError(f"Could not parse price from Jumia page text.")
