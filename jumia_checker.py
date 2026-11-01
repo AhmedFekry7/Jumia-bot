@@ -10,7 +10,7 @@ CHAT_ID = str(os.environ["CHAT_ID"]).strip()
 STATE_FILE = "state.json"
 
 STARTER_URLS = [
-    "https://www.jumia.com.eg/defacto-regular-fit-hooded-zip-up-ski-jacket-135305752.html"
+    "https://www.jumia.com.eg/ar/defacto-regular-fit-hooded-zip-up-ski-jacket-135305752.html"
 ]
 
 
