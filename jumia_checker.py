@@ -57,39 +57,34 @@ def scrape_jumia_product(url: str) -> dict:
     # Extract Title
     title = "DeFacto Ski Jacket"
     for line in text.split("\n"):
-        if "defacto" in line.lower() or "jacket" in line.lower():
-            title = line.strip().replace("#", "").strip()
-            break
+        if "defacto" in line.lower() or "jacket" in line.lower() or "ski" in line.lower():
+            clean_line = line.strip().replace("#", "").strip()
+            if len(clean_line) > 5:
+                title = clean_line
+                break
 
-    # Extract Price looking specifically for numbers near EGP or LE
+    # Extract Price - scan all numbers and pick the most likely clothing price in EGP
     price = None
+    # Look for lines with currency indicators or find numbers with decimals
     for line in text.split("\n"):
-        if "egp" in line.lower() or "le" in line.lower():
-            matches = re.findall(r"([\d,]+\.\d{2})|([\d,]{3,})", line)
-            for match in matches:
-                num_str = match[0] or match[1]
-                cleaned = num_str.replace(",", "").strip()
-                try:
-                    val = float(cleaned)
-                    if 50 < val < 500000:  # Reasonable price range filter
-                        price = val
-                        break
-                except ValueError:
-                    continue
+        # Find currency patterns like EGP, LE, or numbers with commas/decimals
+        matches = re.findall(r"([\d,]+\.\d{2})|(\b\d{3,6}\b)", line)
+        for match in matches:
+            num_str = match[0] or match[1]
+            cleaned = num_str.replace(",", "").strip()
+            try:
+                val = float(cleaned)
+                # Filter for realistic clothing prices in EGP (e.g., between 100 and 50,000)
+                if 100 <= val <= 50000:
+                    price = val
+                    break
+            except ValueError:
+                continue
         if price:
             break
 
-    # Ultimate fallback: find any 3 to 6 digit number in the text
     if price is None:
-        all_nums = re.findall(r"\b(\d{3,6})\b", text)
-        for num in all_nums:
-            val = float(num)
-            if 100 < val < 100000:
-                price = val
-                break
-
-    if price is None:
-        raise ValueError(f"Could not parse price from Jumia page text.")
+        raise ValueError(f"Could not parse price from Jumia page text. Raw text snippet: {text[:200]}...")
 
     in_stock = True
     if "out of stock" in text.lower() or "غير متوفر" in text.lower():
