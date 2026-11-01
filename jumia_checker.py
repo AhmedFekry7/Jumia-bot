@@ -2,7 +2,8 @@ import json
 import os
 import re
 import time
-import requests
+from bs4 import BeautifulSoup
+from curl_cffi import requests as cffi_requests
 
 BOT_TOKEN = os.environ["BOT_TOKEN"]
 CHAT_ID = str(os.environ["CHAT_ID"]).strip()
@@ -16,7 +17,7 @@ STARTER_URLS = [
 def send_telegram(message: str):
     url = f"https://api.telegram.org/bot{BOT_TOKEN.strip()}/sendMessage"
     try:
-        resp = requests.post(
+        resp = cffi_requests.post(
             url,
             json={
                 "chat_id": CHAT_ID.strip(),
@@ -36,7 +37,7 @@ def fetch_new_telegram_messages(last_update_id: int) -> list:
     if last_update_id:
         params["offset"] = last_update_id + 1
     try:
-        resp = requests.get(url, params=params, timeout=15)
+        resp = cffi_requests.get(url, params=params, timeout=15)
         data = resp.json()
         if data.get("ok"):
             return data.get("result", [])
@@ -47,29 +48,20 @@ def fetch_new_telegram_messages(last_update_id: int) -> list:
 
 def scrape_jumia_product(url: str) -> dict:
     clean_url = url.split("?")[0].strip()
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-        "Accept-Language": "en-US,en;q=0.9"
-    }
     
-    html_content = None
-    # Try primary proxy (AllOrigins)
-    try:
-        proxy_url = f"https://api.allorigins.win/raw?url={clean_url}"
-        resp = requests.get(proxy_url, headers=headers, timeout=15)
-        if resp.status_code == 200 and "Just a moment" not in resp.text:
-            html_content = resp.text
-    except Exception:
-        pass
+    # Use curl_cffi with Chrome impersonation to bypass Cloudflare 403s
+    response = cffi_requests.get(
+        clean_url,
+        impersonate="chrome120",
+        headers={
+            "Accept-Language": "en-US,en;q=0.9,ar;q=0.8",
+            "Cache-Control": "no-cache",
+        },
+        timeout=30,
+    )
+    response.raise_for_status()
+    soup = BeautifulSoup(response.text, "html.parser")
 
-    # Fallback to direct request if proxy fails or times out
-    if not html_content:
-        resp = requests.get(clean_url, headers=headers, timeout=15)
-        resp.raise_for_status()
-        html_content = resp.text
-
-    soup = BeautifulSoup(html_content, "html.parser")
-    
     title = None
     price = None
     in_stock = True
@@ -112,10 +104,9 @@ def scrape_jumia_product(url: str) -> dict:
                 price = float(match.group(0))
 
     if price is None:
-        raise ValueError(f"Could not parse price from page response.")
+        raise ValueError(f"Could not parse price from Jumia page.")
 
     return {"title": title, "price": price, "in_stock": in_stock}
-
 
 
 def send_product_list(products: dict):
