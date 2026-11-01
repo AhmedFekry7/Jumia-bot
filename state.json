@@ -1,4 +1,10 @@
 {
-  "last_update_id": 19180816,
-  "products": {}
+  "last_update_id": 19180820,
+  "products": {
+    "https://www.jumia.com.eg/defacto-water-repellent-windproof-slim-fit-hooded-zip-up-puffer-jacket-with-pockets-135305753.html": {
+      "title": null,
+      "price": null,
+      "in_stock": true
+    }
+  }
 }
