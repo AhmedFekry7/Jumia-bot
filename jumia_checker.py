@@ -59,56 +59,29 @@ def scrape_jumia_product(url: str) -> dict:
     price = None
     in_stock = True
 
-    # 1. Try JSON-LD
-    for script in soup.find_all("script", type="application/ld+json"):
-        try:
-            data = json.loads(script.string or "")
-            items = data if isinstance(data, list) else [data]
-            for item in items:
-                if item.get("@type") == "Product":
-                    title = item.get("name")
-                    offers = item.get("offers", {})
-                    if isinstance(offers, list):
-                        offers = offers[0]
-                    raw_price = offers.get("price") or offers.get("lowPrice")
-                    if raw_price is not None:
-                        price = float(str(raw_price).replace(",", ""))
-                    availability = str(offers.get("availability", ""))
-                    if "OutOfStock" in availability:
-                        in_stock = False
-                    elif "InStock" in availability:
-                        in_stock = True
-        except Exception:
-            continue
+    # 1. Fallback Title
+    h1 = soup.select_one("h1.-fs20") or soup.find("h1")
+    title = h1.get_text(strip=True) if h1 else "Jumia Product"
 
-    # 2. Fallback Title
-    if not title:
-        h1 = soup.select_one("h1.-fs20") or soup.find("h1")
-        title = h1.get_text(strip=True) if h1 else "Jumia Product"
+    # 2. Direct search for price elements or text containing numbers with EGP/LE
+    price_els = soup.select("span.-b.-fs24, span.-fs24, div.prc, span.-prxs")
+    for el in price_els:
+        raw_text = el.get_text(strip=True).replace(",", "")
+        match = re.search(r"(\d{3,6}(?:\.\d{2})?)", raw_text)
+        if match:
+            val = float(match.group(1))
+            if 50 <= val <= 300000:
+                price = val
+                break
 
-    # 3. Fallback Price Selectors for Jumia
-    if price is None:
-        price_el = (
-            soup.select_one("span.-b.-ubpt.-tal.-fs24.-prxs")
-            or soup.select_one("span.-b.-fs24")
-            or soup.select_one("div.prc")
-            or soup.select_one("span.price")
-        )
-        if price_el:
-            raw_text = price_el.get_text(strip=True).replace(",", "")
-            match = re.search(r"\d+(\.\d+)?", raw_text)
-            if match:
-                price = float(match.group(0))
-
-    # 4. Ultimate Regex Fallback on page text if still None
+    # 3. Ultimate Fallback: Scan full page text for price patterns
     if price is None:
         page_text = soup.get_text(" ", strip=True)
-        # Look for numbers near EGP or general price-like values
-        matches = re.findall(r"(?:EGP|LE)?\s*(\d{3,6}(?:\.\d{2})?)", page_text)
+        matches = re.findall(r"\b(\d{3,6}(?:\.\d{2})?)\b", page_text)
         for m in matches:
             try:
-                val = float(m.replace(",", ""))
-                if 50 <= val <= 200000:
+                val = float(m)
+                if 50 <= val <= 300000:
                     price = val
                     break
             except ValueError:
