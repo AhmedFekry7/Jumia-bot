@@ -46,49 +46,67 @@ def fetch_new_telegram_messages(last_update_id: int) -> list:
 
 
 def scrape_jumia_product(url: str) -> dict:
+def scrape_jumia_product(url: str) -> dict:
     clean_url = url.split("?")[0].strip()
-    proxy_url = f"https://r.jina.ai/{clean_url}"
-    headers = {"Accept": "text/plain"}
+    
+    # Route through AllOrigins proxy to bypass Cloudflare data-center blocks
+    proxy_url = f"https://api.allorigins.win/raw?url={clean_url}"
+    
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+    }
     
     response = requests.get(proxy_url, headers=headers, timeout=30)
     response.raise_for_status()
-    text = response.text
-
-    # Extract Title
-    title = "DeFacto Ski Jacket"
-    for line in text.split("\n"):
-        if "defacto" in line.lower() or "jacket" in line.lower() or "ski" in line.lower():
-            clean_line = line.strip().replace("#", "").strip()
-            if len(clean_line) > 5:
-                title = clean_line
-                break
-
-    # Extract Price - scan all numbers and pick the most likely clothing price in EGP
+    html_content = response.text
+    
+    soup = BeautifulSoup(html_content, "html.parser")
+    
+    title = None
     price = None
-    # Look for lines with currency indicators or find numbers with decimals
-    for line in text.split("\n"):
-        # Find currency patterns like EGP, LE, or numbers with commas/decimals
-        matches = re.findall(r"([\d,]+\.\d{2})|(\b\d{3,6}\b)", line)
-        for match in matches:
-            num_str = match[0] or match[1]
-            cleaned = num_str.replace(",", "").strip()
-            try:
-                val = float(cleaned)
-                # Filter for realistic clothing prices in EGP (e.g., between 100 and 50,000)
-                if 100 <= val <= 50000:
-                    price = val
-                    break
-            except ValueError:
-                continue
-        if price:
-            break
+    in_stock = True
+
+    # 1. Extract from Jumia's JSON-LD Structured Data
+    for script in soup.find_all("script", type="application/ld+json"):
+        try:
+            data = json.loads(script.string or "")
+            items = data if isinstance(data, list) else [data]
+            for item in items:
+                if item.get("@type") == "Product":
+                    title = item.get("name")
+                    offers = item.get("offers", {})
+                    if isinstance(offers, list):
+                        offers = offers[0]
+                    raw_price = offers.get("price") or offers.get("lowPrice")
+                    if raw_price is not None:
+                        price = float(str(raw_price).replace(",", ""))
+                    availability = str(offers.get("availability", ""))
+                    if "OutOfStock" in availability:
+                        in_stock = False
+                    elif "InStock" in availability:
+                        in_stock = True
+        except Exception:
+            continue
+
+    # 2. Fallback HTML selectors
+    if not title:
+        h1 = soup.select_one("h1.-fs20") or soup.find("h1")
+        title = h1.get_text(strip=True) if h1 else "DeFacto Ski Jacket"
 
     if price is None:
-        raise ValueError(f"Could not parse price from Jumia page text. Raw text snippet: {text[:200]}...")
+        price_el = (
+            soup.select_one("span.-b.-ubpt.-tal.-fs24.-prxs")
+            or soup.select_one("span.-b.-fs24")
+            or soup.select_one("div.prc")
+        )
+        if price_el:
+            raw_text = price_el.get_text(strip=True).replace(",", "")
+            match = re.search(r"\d+(\.\d+)?", raw_text)
+            if match:
+                price = float(match.group(0))
 
-    in_stock = True
-    if "out of stock" in text.lower() or "غير متوفر" in text.lower():
-        in_stock = False
+    if price is None:
+        raise ValueError(f"Could not parse price from proxy HTML response.")
 
     return {"title": title, "price": price, "in_stock": in_stock}
 
